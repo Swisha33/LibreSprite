@@ -143,4 +143,20 @@ void HttpRequest::setPostBody(const std::string& body)
 
 } // namespace net
 
+#elif defined(__vita__)
+
+// No libcurl on this platform: network requests always fail gracefully.
+namespace net {
+
+class HttpRequestImpl {};
+
+HttpRequest::HttpRequest(const std::string& url) : m_impl{new HttpRequestImpl()} {}
+HttpRequest::~HttpRequest() {}
+void HttpRequest::setHeaders(const HttpHeaders& headers) {}
+bool HttpRequest::send(HttpResponse& response) { return false; }
+void HttpRequest::abort() {}
+void HttpRequest::setPostBody(const std::string& body) {}
+
+} // namespace net
+
 #endif

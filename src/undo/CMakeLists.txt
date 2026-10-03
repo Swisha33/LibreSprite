@@ -1,7 +1,7 @@
 # Undo Library
 # Copyright (C) 2015 David Capello
 
-cmake_minimum_required(VERSION 4.1)
+cmake_minimum_required(VERSION 3.20)
 
 project(undo CXX)
 option(UNDO_TESTS "Compile undo tests" on)

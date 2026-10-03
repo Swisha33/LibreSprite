@@ -25,7 +25,7 @@ endif(MSVC)
 # Directories where .h files can be found
 include_directories(. .. ../third_party ../third_party/observable)
 
-if((UNIX AND NOT APPLE) OR (WIN32 AND NOT MSVC))
+if((UNIX AND NOT APPLE) OR (WIN32 AND NOT MSVC) OR VITA)
   set(KEEP_INJECTIONS_BEGIN "-Wl,--whole-archive")
   set(KEEP_INJECTIONS_END "-Wl,--no-whole-archive")
 endif()
@@ -73,7 +73,14 @@ add_subdirectory(base)
 # Directory where base/config.h file is located
 include_directories(${BASE_INCLUDE_DIR})
 
-add_subdirectory(gen)
+if(HOST_GEN_EXECUTABLE)
+  # Cross builds (e.g. PS Vita) run a "gen" tool built for the host.
+  add_custom_target(gen
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/bin
+    COMMAND ${CMAKE_COMMAND} -E copy ${HOST_GEN_EXECUTABLE} ${CMAKE_BINARY_DIR}/bin/gen)
+else()
+  add_subdirectory(gen)
+endif()
 add_subdirectory(app)
 if (NOT GEN_ONLY)
 add_subdirectory(cfg)
@@ -145,6 +152,19 @@ target_link_libraries(libresprite ${KEEP_INJECTIONS_BEGIN}
   ${ZLIB_LIBRARIES}
   ${FREETYPE_LIBRARIES}
   ${PLATFORM_LIBS})
+
+if(VITA)
+  include("${VITASDK}/share/vita.cmake" REQUIRED)
+  set(VITA_APP_NAME "LibreSprite")
+  set(VITA_TITLEID  "LSPR00001")
+  set(VITA_VERSION  "01.00")
+  vita_create_self(eboot.bin libresprite)
+  vita_create_vpk(LibreSprite.vpk ${VITA_TITLEID} eboot.bin
+    VERSION ${VITA_VERSION}
+    NAME ${VITA_APP_NAME}
+    FILE ${CMAKE_SOURCE_DIR}/vita/sce_sys sce_sys
+    FILE ${CMAKE_SOURCE_DIR}/data data)
+endif()
 
 install(TARGETS libresprite
   RUNTIME DESTINATION bin)

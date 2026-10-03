@@ -43,6 +43,20 @@ bool is_process_running(pid pid)
   return running;
 }
 
+#elif defined(__vita__)
+
+pid get_current_process_id()
+{
+  return (pid)1;
+}
+
+bool is_process_running(pid pid)
+{
+  // Only one instance of a Vita application can run at a time, so any
+  // previous session's process is necessarily gone.
+  return false;
+}
+
 #else
 
 pid get_current_process_id()

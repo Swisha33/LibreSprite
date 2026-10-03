@@ -67,8 +67,15 @@ namespace she {
 
     unique_display = this;
 
+#ifdef __vita__
+    // The Vita screen is a fixed 960x544 panel; touch coordinates are
+    // mapped to the window size, so the window must match it exactly.
+    width = 960;
+    height = 544;
+#else
     width = 800;
     height = 600;
+#endif
 
     instance()->gfx([&]{
       m_window = SDL_CreateWindow("",
@@ -327,6 +334,11 @@ namespace she {
 
   bool SDL2Display::setNativeMouseCursor(NativeCursor cursor)
   {
+#ifdef __vita__
+    // No hardware cursor on the Vita: let the UI draw its own, so the
+    // stick-driven pointer stays visible.
+    return false;
+#endif
     switch (cursor) {
     case she::kArrowCursor: applyCursor(SDL_SYSTEM_CURSOR_ARROW); return true;
     case she::kIBeamCursor: applyCursor(SDL_SYSTEM_CURSOR_IBEAM); return true;

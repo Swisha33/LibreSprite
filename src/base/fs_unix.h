@@ -27,6 +27,9 @@
 #include "base/time.h"
 
 #define MAXPATHLEN 1024
+#ifndef PATH_MAX
+#define PATH_MAX MAXPATHLEN
+#endif
 
 #if defined(ANDROID)
 extern std::string _AndroidDataDir;
@@ -143,6 +146,9 @@ std::string get_app_path()
       path.resize(size);
 #elif defined(ANDROID)
   return _AndroidDataDir + "/";
+#elif defined(__vita__)
+  // Installed VPK contents are mounted read-only at app0:
+  return "app0:/eboot.bin";
 #else  /* linux */
   readlink("/proc/self/exe", &path[0], path.size());
 #endif
@@ -212,7 +218,8 @@ std::vector<std::string> get_font_paths()
 
 std::vector<std::string> get_font_paths()
 {
-    std::string home = getenv("HOME");
+    const char* homeEnv = getenv("HOME");
+    std::string home = homeEnv ? homeEnv : "";
     if (home.empty())
         home = "~";
     return {

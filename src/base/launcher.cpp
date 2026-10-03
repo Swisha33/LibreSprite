@@ -21,7 +21,7 @@
 #include <emscripten/emscripten.h>
 #endif
 
-#if !defined(_WIN32) && !defined(__EMSCRIPTEN__) && !defined(ANDROID)
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__) && !defined(ANDROID) && !defined(__vita__)
 #include <spawn.h>
 #include <sys/wait.h>
 
@@ -131,7 +131,7 @@ bool open_file(const std::string& file)
 
   ret = spawn_and_wait({"open", file});
 
-#elif ANDROID
+#elif defined(ANDROID) || defined(__vita__)
 
   // No-op
 
@@ -172,7 +172,7 @@ bool open_folder(const std::string& _file)
   }
   return (ret == 0);
 
-#elif ANDROID
+#elif defined(ANDROID) || defined(__vita__)
 
   // No-op
 

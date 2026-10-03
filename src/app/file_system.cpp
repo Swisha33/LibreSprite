@@ -461,12 +461,17 @@ const FileItemList& FileItem::children()
             child = new FileItem(this);
 
             bool is_folder;
+#ifdef __vita__
+            // Vita's dirent has no d_type.
+            is_folder = base::is_directory(fullfn);
+#else
             if (entry->d_type == DT_LNK) {
               is_folder = base::is_directory(fullfn);
             }
             else {
               is_folder = (entry->d_type == DT_DIR);
             }
+#endif
 
             child->m_filename = fullfn;
             child->m_displayname = fn;

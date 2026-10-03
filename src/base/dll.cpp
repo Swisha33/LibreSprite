@@ -12,6 +12,8 @@
 
 #ifdef _WIN32
   #include "base/dll_win32.h"
+#elif defined(__vita__)
+  #include "base/dll_none.h"
 #else
   #include "base/dll_unix.h"
 #endif

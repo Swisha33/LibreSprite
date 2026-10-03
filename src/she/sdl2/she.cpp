@@ -40,6 +40,9 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <algorithm>
+#include <cstdlib>
+#include <deque>
 
 #define SDL_HINT_WINDOWS_DPI_AWARENESS "SDL_WINDOWS_DPI_AWARENESS"
 
@@ -288,6 +291,136 @@ static void patchEventListeners() {
 
 static std::deque<she::Event> keybuffer;
 static bool display_has_mouse = false;
+
+#ifdef __vita__
+// PS Vita: the built-in buttons and sticks arrive as an SDL game
+// controller. They are translated here into the keyboard/mouse events
+// LibreSprite already understands, without going through SDL's text
+// input (which would pop up the system IME on every press).
+namespace vita_input {
+  static SDL_GameController* controller = nullptr;
+  static bool rightClickHeld = false;      // Circle: touches act as right button
+  static she::Event::MouseButton touchButton = she::Event::LeftButton;
+  static float pointerX = 480, pointerY = 272; // virtual pointer (screen pixels)
+  static bool pointerButtonDown = false;   // Triangle pressed at virtual pointer
+  static std::chrono::steady_clock::time_point lastPoll = std::chrono::steady_clock::now();
+  static std::chrono::steady_clock::time_point lastWheel = std::chrono::steady_clock::now();
+
+  // Mirrors the SDL_KEYDOWN/SDL_KEYUP branch of the event loop for a
+  // synthetic key, so held keys (Space, Alt...) are visible to
+  // she::is_key_pressed() just like a physical keyboard.
+  static void key(SDL_Keycode sym, bool down) {
+    auto modifierIt = modifiers.find(sym);
+    if (modifierIt != modifiers.end())
+      modifierIt->second.isPressed = down;
+    auto it = keyCodeMapping.find(sym);
+    if (it == keyCodeMapping.end())
+      return;
+    it->second.isPressed = down;
+    she::Event event;
+    event.setType(down ? she::Event::KeyDown : she::Event::KeyUp);
+    event.setModifiers(getSheModifiers());
+    event.setScancode(static_cast<she::KeyScancode>(it->second.sheModifier));
+    keybuffer.push_back(event);
+  }
+
+  static void shortcut(SDL_Keycode modifier, SDL_Keycode sym) {
+    key(modifier, true);
+    key(sym, true);
+    key(sym, false);
+    key(modifier, false);
+  }
+
+  static void open() {
+    if (controller)
+      return;
+    for (int i = 0; i < SDL_NumJoysticks(); ++i) {
+      if (SDL_IsGameController(i)) {
+        controller = SDL_GameControllerOpen(i);
+        if (controller)
+          break;
+      }
+    }
+  }
+
+  static void button(Uint8 button, bool down) {
+    switch (button) {
+    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:  if (down) shortcut(SDLK_LCTRL, SDLK_z); break; // L: undo
+    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: if (down) shortcut(SDLK_LCTRL, SDLK_y); break; // R: redo
+    case SDL_CONTROLLER_BUTTON_DPAD_UP:    key(SDLK_UP, down); break;
+    case SDL_CONTROLLER_BUTTON_DPAD_DOWN:  key(SDLK_DOWN, down); break;
+    case SDL_CONTROLLER_BUTTON_DPAD_LEFT:  key(SDLK_LEFT, down); break;
+    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: key(SDLK_RIGHT, down); break;
+    case SDL_CONTROLLER_BUTTON_X:     key(SDLK_SPACE, down); break; // Square: hold to pan
+    case SDL_CONTROLLER_BUTTON_A:     key(SDLK_LALT, down); break;  // Cross: hold for Alt (eyedropper)
+    case SDL_CONTROLLER_BUTTON_B:     rightClickHeld = down; break; // Circle: hold for right click
+    case SDL_CONTROLLER_BUTTON_START: key(SDLK_RETURN, down); break;
+    case SDL_CONTROLLER_BUTTON_BACK:  key(SDLK_ESCAPE, down); break; // Select
+    case SDL_CONTROLLER_BUTTON_Y: {   // Triangle: click at the virtual pointer
+      she::Event event;
+      event.setType(down ? she::Event::MouseDown : she::Event::MouseUp);
+      event.setButton(rightClickHeld ? she::Event::RightButton : she::Event::LeftButton);
+      event.setModifiers(getSheModifiers());
+      event.setPosition({int(pointerX) / she::unique_display->scale(),
+                         int(pointerY) / she::unique_display->scale()});
+      event.setPressure(down ? 1.0f : 0.0f);
+      event.setPointerType(she::PointerType::Mouse);
+      pointerButtonDown = down;
+      keybuffer.push_back(event);
+      break;
+    }
+    default:
+      break;
+    }
+  }
+
+  // Analog sticks: left moves the virtual pointer, right (vertical) zooms.
+  static void poll() {
+    auto now = std::chrono::steady_clock::now();
+    float dt = std::chrono::duration<float>(now - lastPoll).count();
+    lastPoll = now;
+    if (!controller || !she::unique_display)
+      return;
+    if (dt > 0.1f)
+      dt = 0.1f;
+
+    const int deadzone = 6000;
+    int lx = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX);
+    int ly = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY);
+    if (std::abs(lx) > deadzone || std::abs(ly) > deadzone) {
+      // Quadratic response: slow near the center for pixel-precise moves.
+      auto curve = [](int v) {
+        float f = (std::abs(v) < 6000) ? 0.0f : v / 32767.0f;
+        return f * std::abs(f);
+      };
+      const float speed = 600.0f; // pixels per second at full tilt
+      pointerX = std::clamp(pointerX + curve(lx) * speed * dt, 0.0f, 959.0f);
+      pointerY = std::clamp(pointerY + curve(ly) * speed * dt, 0.0f, 543.0f);
+      she::Event event;
+      event.setType(she::Event::MouseMove);
+      event.setModifiers(getSheModifiers());
+      event.setPosition({int(pointerX) / she::unique_display->scale(),
+                         int(pointerY) / she::unique_display->scale()});
+      event.setPressure(pointerButtonDown ? 1.0f : 0.0f);
+      event.setPointerType(she::PointerType::Mouse);
+      keybuffer.push_back(event);
+    }
+
+    int ry = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTY);
+    using namespace std::chrono_literals;
+    if (std::abs(ry) > 16000 && now - lastWheel > 150ms) {
+      lastWheel = now;
+      she::Event event;
+      event.setType(she::Event::MouseWheel);
+      event.setModifiers(getSheModifiers());
+      event.setWheelDelta({0, ry > 0 ? 1 : -1});
+      event.setPosition({int(pointerX) / she::unique_display->scale(),
+                         int(pointerY) / she::unique_display->scale()});
+      keybuffer.push_back(event);
+    }
+  }
+}
+#endif
 namespace she {
   void log(const std::string& text) {
 #if defined(ANDROID)
@@ -362,8 +495,34 @@ namespace she {
 
     void getEventInternal(Event& event, bool) {
       SDL_Event sdlEvent;
+#ifdef __vita__
+      vita_input::poll();
+#endif
       while (SDL_PollEvent(&sdlEvent)) {
         switch (sdlEvent.type) {
+#ifdef __vita__
+        case SDL_CONTROLLERDEVICEADDED:
+          vita_input::open();
+          continue;
+        case SDL_CONTROLLERBUTTONDOWN:
+        case SDL_CONTROLLERBUTTONUP:
+          vita_input::button(sdlEvent.cbutton.button,
+                             sdlEvent.type == SDL_CONTROLLERBUTTONDOWN);
+          continue;
+        case SDL_CONTROLLERAXISMOTION:
+        case SDL_CONTROLLERDEVICEREMOVED:
+        case SDL_CONTROLLERDEVICEREMAPPED:
+        case SDL_JOYAXISMOTION:
+        case SDL_JOYBALLMOTION:
+        case SDL_JOYHATMOTION:
+        case SDL_JOYBUTTONDOWN:
+        case SDL_JOYBUTTONUP:
+        case SDL_JOYDEVICEADDED:
+        case SDL_JOYDEVICEREMOVED:
+        case SDL_FINGERDOWN:
+        case SDL_FINGERUP:
+          continue;
+#endif
         case SDL_APP_DIDENTERFOREGROUND:
           SDL2Surface::textureGen++;
           forceFlip();
@@ -468,6 +627,15 @@ namespace she {
               sdlEvent.motion.x / unique_display->scale(),
               sdlEvent.motion.y / unique_display->scale()
             });
+#ifdef __vita__
+          // Keep the stick-driven pointer where the finger last was.
+          vita_input::pointerX = sdlEvent.motion.x;
+          vita_input::pointerY = sdlEvent.motion.y;
+          // The touch panel's force readings are not a pen pressure.
+          event.setPressure(0);
+          event.setPointerType(pointerType);
+          return;
+#endif
 
 	  {
 	      int hasFingerEvent = SDL_PeepEvents(&sdlEvent, 1, SDL_PEEKEVENT, SDL_FINGERMOTION, SDL_FINGERMOTION);
@@ -482,7 +650,9 @@ namespace she {
           return;
 
         case SDL_FINGERMOTION:
+#ifndef __vita__
           penPressure = std::max<>(sdlEvent.tfinger.pressure, 0.0001f);
+#endif
           continue;
 
         case SDL_MOUSEWHEEL:
@@ -507,6 +677,14 @@ namespace she {
             });
           event.setButton(mouseButtonMapping[sdlEvent.button.button]);
           event.setModifiers(getSheModifiers());
+#ifdef __vita__
+          // Holding Circle turns a touch into a right click. The button
+          // chosen on touch-down is reused for the matching touch-up.
+          if (sdlEvent.type == SDL_MOUSEBUTTONDOWN)
+            vita_input::touchButton = vita_input::rightClickHeld
+              ? Event::RightButton : Event::LeftButton;
+          event.setButton(vita_input::touchButton);
+#endif
 
 	  if (penPressure > 0.0f) {
 	    pointerType = PointerType::Pen;
@@ -970,7 +1148,62 @@ namespace she {
 // It must be defined by the user program code.
 extern int app_main(int argc, char* argv[]);
 
+#ifdef __vita__
+#include <psp2/io/stat.h>
+#include <psp2/power.h>
+#include <cstdio>
+#include <cstdlib>
+
+extern "C" {
+// Main-memory heap for newlib's malloc (the default is far too small for
+// an image editor). Textures live in separate GPU memory blocks.
+__attribute__((used)) int _newlib_heap_size_user = 192 * 1024 * 1024;
+// Default stack for std::thread/pthreads (pthread-embedded's own default
+// is only 4 KiB).
+__attribute__((used)) unsigned int _pthread_stack_default_user = 1024 * 1024;
+// Main thread stack, read by vita-elf-create into the process parameters.
+__attribute__((used)) extern const unsigned int sceUserMainThreadStackSize = 4 * 1024 * 1024;
+}
+
+static void vita_setup_environment() {
+  // Writable storage for preferences, sessions, logs and user files.
+  static const char* dirs[] = {
+    "ux0:data/LibreSprite",
+    "ux0:data/LibreSprite/config",
+    "ux0:data/LibreSprite/config/libresprite",
+    "ux0:data/LibreSprite/tmp",
+    "ux0:data/LibreSprite/sprites",
+  };
+  for (auto dir : dirs)
+    sceIoMkdir(dir, 0777);
+
+  setenv("HOME", "ux0:data/LibreSprite", 1);
+  setenv("XDG_CONFIG_HOME", "ux0:data/LibreSprite/config", 1);
+  setenv("XDG_DESKTOP_DIR", "ux0:data/LibreSprite/sprites", 1);
+  setenv("TMPDIR", "ux0:data/LibreSprite/tmp", 1);
+
+  // Console output is invisible on the Vita; keep it for bug reports.
+  std::freopen("ux0:data/LibreSprite/log.txt", "w", stdout);
+  std::freopen("ux0:data/LibreSprite/log.txt", "a", stderr);
+
+  // Run at full clock speed: the editor redraws a lot on the CPU.
+  scePowerSetArmClockFrequency(444);
+  scePowerSetBusClockFrequency(222);
+  scePowerSetGpuClockFrequency(222);
+  scePowerSetGpuXbarClockFrequency(166);
+
+  SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1");
+  // Only the front panel drives the pointer; ignore the rear touchpad so
+  // fingers resting on the back of the console don't paint.
+  SDL_SetHint(SDL_HINT_VITA_TOUCH_MOUSE_DEVICE, "1");
+  setenv("VITA_DISABLE_TOUCH_BACK", "1", 1);
+}
+#endif
+
 int main(const int argc, char* argv[]) {
+#ifdef __vita__
+  vita_setup_environment();
+#endif
   #ifdef SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR
   SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
   #endif
@@ -981,7 +1214,12 @@ int main(const int argc, char* argv[]) {
   // https://wiki.libsdl.org/SDL2/SDL_HINT_WINDOWS_DPI_AWARENESS
   SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
 
-  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) {
+#ifdef __vita__
+  const Uint32 sdlInitFlags = SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER;
+#else
+  const Uint32 sdlInitFlags = SDL_INIT_VIDEO | SDL_INIT_EVENTS;
+#endif
+  if (SDL_Init(sdlInitFlags) != 0) {
     std::cerr << "Critical: Could not initialize SDL2. Aborting." << std::endl;
     return -1;
   }
@@ -990,5 +1228,8 @@ int main(const int argc, char* argv[]) {
     return -2;
   }
   SDL_EventState(SDL_FINGERMOTION, SDL_ENABLE);
+#ifdef __vita__
+  vita_input::open();
+#endif
   return app_main(argc, argv);
 }

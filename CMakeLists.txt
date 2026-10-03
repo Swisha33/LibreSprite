@@ -1,7 +1,7 @@
 # Aseprite     | Copyright (C) 2001-2016  David Capello
 # LibreSprite  | Copyright (C)      2022  LibreSprite contributors
 
-cmake_minimum_required(VERSION 4.1)
+cmake_minimum_required(VERSION 3.20)
 
 enable_testing()
 
@@ -212,7 +212,12 @@ find_package(JPEG REQUIRED)
 include_directories(${JPEG_INCLUDE_DIRS})
 
 
-find_package(CURL REQUIRED)
+if(VITA)
+  # No libcurl on the PS Vita build; networking is stubbed out.
+  set(CURL_LIBRARIES "")
+else()
+  find_package(CURL REQUIRED)
+endif()
 include_directories(${CURL_INCLUDE_DIRS})
 endif()
 # simpleini
@@ -244,6 +249,25 @@ if(USE_SDL3_BACKEND)
   include_directories(${SDL3_INCLUDE_DIRS})
   find_package(SDL3_image REQUIRED)
   include_directories(${SDL3_IMAGE_INCLUDE_DIRS})
+endif()
+
+# -- PS Vita --
+
+if(VITA AND NOT GEN_ONLY)
+  # newlib hides POSIX declarations (strdup, usleep, realpath...) in
+  # strict -std=c++20 mode unless a feature macro is set.
+  add_definitions(-D_GNU_SOURCE -D_DEFAULT_SOURCE)
+  # Relocations are needed by vita-elf-create to produce the SELF.
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-q")
+  # libstdc++ (pulled in implicitly at the very end) needs pthread after it.
+  set(CMAKE_CXX_STANDARD_LIBRARIES "-lstdc++ -lpthread")
+  # System module stubs needed by the static SDL2 port.
+  list(APPEND PLATFORM_LIBS
+    SceDisplay_stub SceCtrl_stub SceAudio_stub SceAudioIn_stub
+    SceSysmodule_stub SceGxm_stub SceCommonDialog_stub SceAppMgr_stub
+    SceTouch_stub SceHid_stub SceMotion_stub ScePower_stub
+    SceProcessmgr_stub SceIme_stub SceKernelDmacMgr_stub
+    pthread m)
 endif()
 
 # -- Unix --
