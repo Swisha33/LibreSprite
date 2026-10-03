@@ -43,6 +43,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <deque>
+#include <cstdio>
 
 #define SDL_HINT_WINDOWS_DPI_AWARENESS "SDL_WINDOWS_DPI_AWARENESS"
 
@@ -344,6 +345,8 @@ namespace vita_input {
   }
 
   static void button(Uint8 button, bool down) {
+    std::printf("vita: button %d %s at %d,%d\n", int(button),
+                down ? "down" : "up", int(pointerX), int(pointerY));
     switch (button) {
     case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:  if (down) shortcut(SDLK_LCTRL, SDLK_z); break; // L: undo
     case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: if (down) shortcut(SDLK_LCTRL, SDLK_y); break; // R: redo
@@ -375,8 +378,14 @@ namespace vita_input {
   }
 
   // Analog sticks: left moves the virtual pointer, right (vertical) zooms.
+  // Called on every event-queue read. The UI drains the queue in a loop
+  // until it is empty, so this must not produce an event on every call:
+  // sample the sticks at most once per frame and only report real moves.
   static void poll() {
+    using namespace std::chrono_literals;
     auto now = std::chrono::steady_clock::now();
+    if (now - lastPoll < 16ms)
+      return;
     float dt = std::chrono::duration<float>(now - lastPoll).count();
     lastPoll = now;
     if (!controller || !she::unique_display)
@@ -394,8 +403,14 @@ namespace vita_input {
         return f * std::abs(f);
       };
       const float speed = 600.0f; // pixels per second at full tilt
+      const int oldX = int(pointerX) / she::unique_display->scale();
+      const int oldY = int(pointerY) / she::unique_display->scale();
       pointerX = std::clamp(pointerX + curve(lx) * speed * dt, 0.0f, 959.0f);
       pointerY = std::clamp(pointerY + curve(ly) * speed * dt, 0.0f, 543.0f);
+      const bool moved =
+        (int(pointerX) / she::unique_display->scale() != oldX ||
+         int(pointerY) / she::unique_display->scale() != oldY);
+      if (moved) {
       she::Event event;
       event.setType(she::Event::MouseMove);
       event.setModifiers(getSheModifiers());
@@ -404,10 +419,10 @@ namespace vita_input {
       event.setPressure(pointerButtonDown ? 1.0f : 0.0f);
       event.setPointerType(she::PointerType::Mouse);
       keybuffer.push_back(event);
+      }
     }
 
     int ry = SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTY);
-    using namespace std::chrono_literals;
     if (std::abs(ry) > 16000 && now - lastWheel > 150ms) {
       lastWheel = now;
       she::Event event;
@@ -684,6 +699,9 @@ namespace she {
             vita_input::touchButton = vita_input::rightClickHeld
               ? Event::RightButton : Event::LeftButton;
           event.setButton(vita_input::touchButton);
+          std::printf("vita: touch %s at %d,%d\n",
+                      sdlEvent.type == SDL_MOUSEBUTTONDOWN ? "down" : "up",
+                      sdlEvent.button.x, sdlEvent.button.y);
 #endif
 
 	  if (penPressure > 0.0f) {
@@ -1185,6 +1203,9 @@ static void vita_setup_environment() {
   // Console output is invisible on the Vita; keep it for bug reports.
   std::freopen("ux0:data/LibreSprite/log.txt", "w", stdout);
   std::freopen("ux0:data/LibreSprite/log.txt", "a", stderr);
+  // Unbuffered, so the log is complete up to the moment of a crash.
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
+  std::setvbuf(stderr, nullptr, _IONBF, 0);
 
   // Run at full clock speed: the editor redraws a lot on the CPU.
   scePowerSetArmClockFrequency(444);
