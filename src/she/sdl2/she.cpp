@@ -1131,7 +1131,12 @@ namespace she {
     auto it = reverseKeyCodeMapping.find(scancode);
     if (it == reverseKeyCodeMapping.end())
       return 0;
-    return it->second->ascii;
+    // Non-printable keys (Alt, arrows...) have SDL keycodes like
+    // 0x400000E2, which are not characters. Passing them on made
+    // tolower() read far outside newlib's ctype table and crash
+    // (e.g. pressing Alt while a menu is open).
+    int ascii = it->second->ascii;
+    return (ascii > 0 && ascii < 128) ? ascii : 0;
   }
 
   bool is_key_pressed(KeyScancode scancode) {

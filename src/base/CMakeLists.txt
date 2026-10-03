@@ -59,6 +59,11 @@ set(BASE_SOURCES
   trim_string.cpp
   version.cpp)
 
+if(VITA)
+  # newlib's ctype functions crash on values outside [-1, 255]
+  list(APPEND BASE_SOURCES vita_ctype.c)
+endif()
+
 if(APPLE)
   set(BASE_SOURCES ${BASE_SOURCES}
     fs_osx.mm)
